@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"strings"
 	"net/http"
 	"sync/atomic"
 	"encoding/json"
@@ -43,7 +44,7 @@ func handleValidate(w http.ResponseWriter, req *http.Request) {
 		Error string `json:"error"`
 	}
 	type okResp struct {
-		Valid bool `json:"valid"`
+		CleandedBody string `json:"cleaned_body"`
 	}
 	w.Header().Set("Content-Type", "application/json")
 
@@ -80,18 +81,34 @@ func handleValidate(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	replaced := censorString(params.Body)
 	respBody := okResp{
-		Valid : true,
+		CleandedBody : replaced,
 	}
 	dat, err := json.Marshal(respBody)
 	if err != nil {
 		log.Printf("Error marshalling JSON: %s", err)
-			w.WriteHeader(500)
-			return
+		w.WriteHeader(500)
+		return
 	}
 	w.WriteHeader(200)
 	w.Write(dat)
 	return
+}
+
+func censorString(s string) string {
+	censored := []string{}
+	splitted := strings.Split(s, " ")
+	for _, v := range splitted {
+		v = strings.ReplaceAll(v, " ", "")
+		switch strings.ToLower(v) {
+		case "kerfuffle", "sharbert", "fornax":
+			censored = append(censored, "****")
+		default:
+			censored = append(censored, v)
+		}
+	}
+	return strings.Join(censored, " ")
 }
 
 func main () {
