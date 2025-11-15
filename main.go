@@ -261,6 +261,46 @@ func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, req *http.Request) 
 	return
 }
 
+func (cfg *apiConfig) handleGetChirp(w http.ResponseWriter, req *http.Request) {
+	type errResp struct {
+		Error string `json:"error"`
+	}
+	chirpID := req.PathValue("chirpID")
+	chirpUUID, err := uuid.Parse(chirpID)
+	chirp, err := cfg.db.GetChirp(req.Context(), chirpUUID)
+	if err != nil {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(404)
+		w.Write(dat)
+		return
+	}
+
+	mapped := Chirp{
+		ID : chirp.ID,
+		CreatedAt : chirp.CreatedAt,
+		UpdatedAt : chirp.UpdatedAt,
+		Body : chirp.Body,
+		UserID : chirp.UserID,
+	}
+	dat, err := json.Marshal(mapped)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.WriteHeader(200)
+	w.Write(dat)
+	return
+}
+
 func censorString(s string) string {
 	censored := []string{}
 	splitted := strings.Split(s, " ")
@@ -303,6 +343,7 @@ func main () {
 	serveMux.HandleFunc("POST /api/chirps", apiCfg.handleChirps)
 	serveMux.HandleFunc("POST /api/users", apiCfg.handleUsers)
 	serveMux.HandleFunc("GET /api/chirps", apiCfg.handleGetChirps)
+	serveMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handleGetChirp)
 
 	err = server.ListenAndServe()
 	if err != nil {
