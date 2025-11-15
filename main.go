@@ -29,6 +29,14 @@ type User struct {
 	Email     string    `json:"email"`
 }
 
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
+}
+
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg.fileserverHits.Add(1)
@@ -56,19 +64,25 @@ func (cfg *apiConfig) handleReset(w http.ResponseWriter, req *http.Request) {
 	_ = cfg.fileserverHits.Swap(0)
 	err := cfg.db.DeleteUsers(req.Context())
 	if err != nil {
-
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	err = cfg.db.DeleteChirps(req.Context())
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
 	}
 }
 
-func handleValidate(w http.ResponseWriter, req *http.Request) {
+func (cfg *apiConfig) handleChirps(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
 	}
 	type errResp struct {
 		Error string `json:"error"`
-	}
-	type okResp struct {
-		CleandedBody string `json:"cleaned_body"`
 	}
 	w.Header().Set("Content-Type", "application/json")
 
@@ -106,16 +120,40 @@ func handleValidate(w http.ResponseWriter, req *http.Request) {
 	}
 
 	replaced := censorString(params.Body)
-	respBody := okResp{
-		CleandedBody : replaced,
+	createChirpParams := database.CreateChirpParams{
+		Body : replaced,
+		UserID : params.UserID,
 	}
-	dat, err := json.Marshal(respBody)
+	chirp, err := cfg.db.CreateChirp(req.Context(), createChirpParams)
+	if err != nil {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(400)
+		w.Write(dat)
+		return
+	}
+	mapped := Chirp{
+		ID : chirp.ID,
+		CreatedAt : chirp.CreatedAt,
+		UpdatedAt : chirp.UpdatedAt,
+		Body : chirp.Body,
+		UserID : chirp.UserID,
+	}
+
+	dat, err := json.Marshal(mapped)
 	if err != nil {
 		log.Printf("Error marshalling JSON: %s", err)
 		w.WriteHeader(500)
 		return
 	}
-	w.WriteHeader(200)
+	w.WriteHeader(201)
 	w.Write(dat)
 	return
 }
@@ -179,6 +217,50 @@ func (cfg *apiConfig) handleUsers(w http.ResponseWriter, req *http.Request) {
 	return
 }
 
+func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, req *http.Request) {
+	type errResp struct {
+		Error string `json:"error"`
+	}
+	w.Header().Set("Content-Type", "application/json")
+	chirps, err := cfg.db.GetChirps(req.Context())
+	if err != nil {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(400)
+		w.Write(dat)
+		return
+	}
+
+	mappedChirps := []Chirp{}
+	for _, v := range chirps {
+		mapped := Chirp{
+			ID : v.ID,
+			CreatedAt : v.CreatedAt,
+			UpdatedAt : v.UpdatedAt,
+			Body : v.Body,
+			UserID : v.UserID,
+		}
+		mappedChirps = append(mappedChirps, mapped)
+	}
+
+	dat, err := json.Marshal(mappedChirps)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.WriteHeader(200)
+	w.Write(dat)
+	return
+}
+
 func censorString(s string) string {
 	censored := []string{}
 	splitted := strings.Split(s, " ")
@@ -218,12 +300,12 @@ func main () {
 	serveMux.HandleFunc("GET /api/healthz", handleHealthz)
 	serveMux.HandleFunc("GET /admin/metrics", apiCfg.handleMetrics)
 	serveMux.HandleFunc("POST /admin/reset", apiCfg.handleReset)
-	serveMux.HandleFunc("POST /api/validate_chirp", handleValidate)
+	serveMux.HandleFunc("POST /api/chirps", apiCfg.handleChirps)
 	serveMux.HandleFunc("POST /api/users", apiCfg.handleUsers)
+	serveMux.HandleFunc("GET /api/chirps", apiCfg.handleGetChirps)
 
 	err = server.ListenAndServe()
 	if err != nil {
 		fmt.Println(err)
 	}
-
 }
