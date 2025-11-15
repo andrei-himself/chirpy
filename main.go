@@ -1,16 +1,32 @@
 package main
 
 import (
+	"os"
 	"fmt"
 	"log"
+	"database/sql"
 	"strings"
+	"time"
 	"net/http"
 	"sync/atomic"
 	"encoding/json"
+	"github.com/andrei-himself/chirpy/internal/database"
+	"github.com/joho/godotenv"   
+	"github.com/google/uuid"
 )
+import _ "github.com/lib/pq"
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	db *database.Queries
+	platform string
+}
+
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -33,7 +49,15 @@ func (cfg *apiConfig) handleMetrics(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cfg *apiConfig) handleReset(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if cfg.platform != "dev" {
+		w.WriteHeader(403)
+	}
 	_ = cfg.fileserverHits.Swap(0)
+	err := cfg.db.DeleteUsers(req.Context())
+	if err != nil {
+
+	}
 }
 
 func handleValidate(w http.ResponseWriter, req *http.Request) {
@@ -96,6 +120,65 @@ func handleValidate(w http.ResponseWriter, req *http.Request) {
 	return
 }
 
+func (cfg *apiConfig) handleUsers(w http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`
+	}
+	type errResp struct {
+		Error string `json:"error"`
+	}
+	w.Header().Set("Content-Type", "application/json")
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(400)
+		w.Write(dat)
+		return
+	}
+
+	user, err := cfg.db.CreateUser(req.Context(), params.Email)
+	if err != nil {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(400)
+		w.Write(dat)
+		return
+	}
+
+	mapped := User{
+		ID : user.ID,
+		CreatedAt : user.CreatedAt,
+		UpdatedAt : user.UpdatedAt,
+		Email : user.Email,
+	}
+	dat, err := json.Marshal(mapped)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.WriteHeader(201)
+	w.Write(dat)
+	return
+}
+
 func censorString(s string) string {
 	censored := []string{}
 	splitted := strings.Split(s, " ")
@@ -113,6 +196,17 @@ func censorString(s string) string {
 
 func main () {
 	apiCfg := apiConfig{}
+	godotenv.Load()
+	dbURL := os.Getenv("DB_URL")
+	platform := os.Getenv("PLATFORM")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	dbQueries := database.New(db)
+	apiCfg.db = dbQueries
+	apiCfg.platform = platform
 
 	serveMux := http.NewServeMux()
 	server := http.Server{
@@ -125,8 +219,9 @@ func main () {
 	serveMux.HandleFunc("GET /admin/metrics", apiCfg.handleMetrics)
 	serveMux.HandleFunc("POST /admin/reset", apiCfg.handleReset)
 	serveMux.HandleFunc("POST /api/validate_chirp", handleValidate)
+	serveMux.HandleFunc("POST /api/users", apiCfg.handleUsers)
 
-	err := server.ListenAndServe()
+	err = server.ListenAndServe()
 	if err != nil {
 		fmt.Println(err)
 	}
