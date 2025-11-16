@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"encoding/json"
 	"github.com/andrei-himself/chirpy/internal/database"
+	"github.com/andrei-himself/chirpy/internal/auth"
 	"github.com/joho/godotenv"   
 	"github.com/google/uuid"
 )
@@ -23,10 +24,10 @@ type apiConfig struct {
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
+	ID             uuid.UUID `json:"id"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	Email          string `json:"email"`
 }
 
 type Chirp struct {
@@ -161,6 +162,7 @@ func (cfg *apiConfig) handleChirps(w http.ResponseWriter, req *http.Request) {
 func (cfg *apiConfig) handleUsers(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
 		Email string `json:"email"`
+		Password string `json:"password"`
 	}
 	type errResp struct {
 		Error string `json:"error"`
@@ -184,7 +186,29 @@ func (cfg *apiConfig) handleUsers(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	user, err := cfg.db.CreateUser(req.Context(), params.Email)
+	hashed, err := auth.HashPassword(params.Password)
+	if err != nil {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(400)
+		w.Write(dat)
+		return
+	}
+	createUserParams := database.CreateUserParams{
+		Email : params.Email,
+		HashedPassword : sql.NullString{
+			String : hashed,
+			Valid : true,
+		},
+	}
+	user, err := cfg.db.CreateUser(req.Context(), createUserParams)
 	if err != nil {
 		respBody := errResp{
 			Error : "Something went wrong",
@@ -301,6 +325,83 @@ func (cfg *apiConfig) handleGetChirp(w http.ResponseWriter, req *http.Request) {
 	return
 }
 
+func (cfg *apiConfig) handleLogin(w http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Password string `json:"password"`
+		Email string `json:"email"`
+	}
+	type errResp struct {
+		Error string `json:"error"`
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(400)
+		w.Write(dat)
+		return
+	}
+
+	user, err := cfg.db.GetUserByEmail(req.Context(), params.Email)
+	if err != nil {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	pwMatch, err := auth.CheckPasswordHash(params.Password, user.HashedPassword.String)
+	if err != nil || pwMatch == false {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	mapped := User{
+		ID : user.ID,
+		CreatedAt : user.CreatedAt,
+		UpdatedAt : user.UpdatedAt,
+		Email : user.Email,
+	}
+	dat, err := json.Marshal(mapped)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.WriteHeader(200)
+	w.Write(dat)
+	return
+}
+
 func censorString(s string) string {
 	censored := []string{}
 	splitted := strings.Split(s, " ")
@@ -344,6 +445,7 @@ func main () {
 	serveMux.HandleFunc("POST /api/users", apiCfg.handleUsers)
 	serveMux.HandleFunc("GET /api/chirps", apiCfg.handleGetChirps)
 	serveMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handleGetChirp)
+	serveMux.HandleFunc("POST /api/login", apiCfg.handleLogin)
 
 	err = server.ListenAndServe()
 	if err != nil {
