@@ -21,6 +21,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db *database.Queries
 	platform string
+	secret string
 }
 
 type User struct {
@@ -28,6 +29,8 @@ type User struct {
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 	Email          string `json:"email"`
+	Token 		   string `json:"token"`
+	RefreshToken   string `json:"refresh_token"`
 }
 
 type Chirp struct {
@@ -105,6 +108,38 @@ func (cfg *apiConfig) handleChirps(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	token, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
 	if len(params.Body) > 140 {
 		respBody := errResp{
 			Error : "Chirp is too long",
@@ -123,7 +158,7 @@ func (cfg *apiConfig) handleChirps(w http.ResponseWriter, req *http.Request) {
 	replaced := censorString(params.Body)
 	createChirpParams := database.CreateChirpParams{
 		Body : replaced,
-		UserID : params.UserID,
+		UserID : userID,
 	}
 	chirp, err := cfg.db.CreateChirp(req.Context(), createChirpParams)
 	if err != nil {
@@ -385,11 +420,65 @@ func (cfg *apiConfig) handleLogin(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	token, err := auth.MakeJWT(user.ID, cfg.secret, 3600 * time.Second)
+	if err != nil || token == "" {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	refreshTokenString, err := auth.MakeRefreshToken()
+	if err != nil || token == "" {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	params2 := database.CreateRefreshTokenParams{
+		Token : refreshTokenString,
+		UserID : user.ID,
+	}
+	refreshToken, err := cfg.db.CreateRefreshToken(req.Context(), params2)
+	if err != nil || refreshToken.Token == "" {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
 	mapped := User{
 		ID : user.ID,
 		CreatedAt : user.CreatedAt,
 		UpdatedAt : user.UpdatedAt,
 		Email : user.Email,
+		Token : token,
+		RefreshToken : refreshToken.Token,
 	}
 	dat, err := json.Marshal(mapped)
 	if err != nil {
@@ -399,6 +488,119 @@ func (cfg *apiConfig) handleLogin(w http.ResponseWriter, req *http.Request) {
 	}
 	w.WriteHeader(200)
 	w.Write(dat)
+	return
+}
+
+func (cfg *apiConfig) handleRefresh(w http.ResponseWriter, req *http.Request) {
+	type okResp struct {
+		Token string `json:"token"`
+	}
+	type errResp struct {
+		Error string `json:"error"`
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	refreshToken, err := auth.GetBearerToken(req.Header)
+	if err != nil || refreshToken == "" {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	refTokenEntry, err := cfg.db.FindRefreshToken(req.Context(), refreshToken)
+	if err != nil || refTokenEntry.ExpiresAt.Compare(time.Now()) == -1 || refTokenEntry.RevokedAt.Valid == true {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	token, err := auth.MakeJWT(refTokenEntry.UserID, cfg.secret, 3600 * time.Second)
+	if err != nil || token == "" {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	resp := okResp{
+		Token : token,
+	}
+	dat, err := json.Marshal(resp)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.WriteHeader(200)
+	w.Write(dat)
+	return
+}
+
+func (cfg *apiConfig) handleRevoke(w http.ResponseWriter, req *http.Request) {
+	type errResp struct {
+		Error string `json:"error"`
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	refreshToken, err := auth.GetBearerToken(req.Header)
+	if err != nil || refreshToken == "" {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	err = cfg.db.RevokeRefreshToken(req.Context(), refreshToken)
+	if err != nil {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	w.WriteHeader(204)
 	return
 }
 
@@ -422,6 +624,7 @@ func main () {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
+	secret := os.Getenv("SECRET")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		fmt.Println(err)
@@ -430,6 +633,7 @@ func main () {
 	dbQueries := database.New(db)
 	apiCfg.db = dbQueries
 	apiCfg.platform = platform
+	apiCfg.secret = secret
 
 	serveMux := http.NewServeMux()
 	server := http.Server{
@@ -446,6 +650,8 @@ func main () {
 	serveMux.HandleFunc("GET /api/chirps", apiCfg.handleGetChirps)
 	serveMux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handleGetChirp)
 	serveMux.HandleFunc("POST /api/login", apiCfg.handleLogin)
+	serveMux.HandleFunc("POST /api/refresh", apiCfg.handleRefresh)
+	serveMux.HandleFunc("POST /api/revoke", apiCfg.handleRevoke)
 
 	err = server.ListenAndServe()
 	if err != nil {

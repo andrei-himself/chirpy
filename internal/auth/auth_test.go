@@ -4,7 +4,21 @@ import (
 	"testing"
 	"time"
 	"github.com/google/uuid"
+	"net/http"
 )
+
+func TestGetBearerToken(t *testing.T) { 
+	req, _ := http.NewRequest("GET", "http://example.com", nil)
+	noTokenString, err := GetBearerToken(req.Header)
+	if noTokenString != "" || err == nil {
+		t.Errorf("GetBearerToken 1 not passed")
+	}
+	req.Header.Add("Authorization", "Bearer TOKEN_STRING")
+	tokenString, err2 := GetBearerToken(req.Header)
+	if tokenString != "TOKEN_STRING" || err2 != nil {
+		t.Errorf("GetBearerToken 2 not passed")
+	}
+}
 
 func TestHashPassword(t *testing.T) {
 	hash1, err1 := HashPassword("testpassword1122334455")

@@ -5,6 +5,10 @@ import (
 	"time"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"fmt"
+	"net/http"
+	"crypto/rand"
+	"encoding/hex"
 )
 
 func HashPassword(password string) (string, error) {
@@ -62,4 +66,22 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 		return zeroUUID, err
 	}
 	return uuidParsed, nil
+}
+
+func GetBearerToken(headers http.Header) (string, error) {
+	v, ok := headers["Authorization"]
+	if !ok {
+		return "", fmt.Errorf("No authorization header in the request")
+	}
+	return v[0][7:], nil
+}
+
+func MakeRefreshToken() (string, error) {
+	bytes := make([]byte, 256)
+	_, err := rand.Read(bytes)
+	if err != nil {
+		return "", err
+	}
+	s := hex.EncodeToString(bytes)
+	return s, nil
 }
