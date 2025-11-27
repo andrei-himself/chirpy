@@ -22,6 +22,7 @@ type apiConfig struct {
 	db *database.Queries
 	platform string
 	secret string
+	polkaKey string
 }
 
 type User struct {
@@ -31,6 +32,7 @@ type User struct {
 	Email          string `json:"email"`
 	Token 		   string `json:"token"`
 	RefreshToken   string `json:"refresh_token"`
+	IsChirpyRed    bool `json:"is_chirpy_red"`
 }
 
 type Chirp struct {
@@ -264,6 +266,7 @@ func (cfg *apiConfig) handleUsers(w http.ResponseWriter, req *http.Request) {
 		CreatedAt : user.CreatedAt,
 		UpdatedAt : user.UpdatedAt,
 		Email : user.Email,
+		IsChirpyRed : user.IsChirpyRed,
 	}
 	dat, err := json.Marshal(mapped)
 	if err != nil {
@@ -479,6 +482,7 @@ func (cfg *apiConfig) handleLogin(w http.ResponseWriter, req *http.Request) {
 		Email : user.Email,
 		Token : token,
 		RefreshToken : refreshToken.Token,
+		IsChirpyRed : user.IsChirpyRed,
 	}
 	dat, err := json.Marshal(mapped)
 	if err != nil {
@@ -709,6 +713,7 @@ func (cfg *apiConfig) handlePutUsers(w http.ResponseWriter, req *http.Request) {
 		CreatedAt : updatedUser.CreatedAt,
 		UpdatedAt : updatedUser.UpdatedAt,
 		Email : updatedUser.Email,
+		IsChirpyRed : updatedUser.IsChirpyRed,
 	}
 	dat, err := json.Marshal(mapped)
 	if err != nil {
@@ -756,6 +761,45 @@ func (cfg *apiConfig) handleDeleteChirp(w http.ResponseWriter, req *http.Request
 	return
 }
 
+func (cfg *apiConfig) handlePolkaWebhook(w http.ResponseWriter, req *http.Request) {
+	type data struct {
+		UserID string `json:"user_id"`
+	}
+	type parameters struct {
+		Event string `json:"event"`
+		Data  data   `json:"data"`
+	}
+
+	polkaKey, err := auth.GetAPIKey(req.Header)
+	if err != nil || polkaKey != cfg.polkaKey {
+		w.WriteHeader(401)
+		return
+	}
+
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err = decoder.Decode(&params)
+	if err != nil {
+		w.WriteHeader(400)
+		return
+	}
+
+	if params.Event != "user.upgraded" {
+		w.WriteHeader(204)
+		return
+	}
+
+	chirpUUID, err := uuid.Parse(params.Data.UserID)
+	err = cfg.db.UpgradeUser(req.Context(), chirpUUID)
+	if err != nil {
+		w.WriteHeader(404)
+		return
+	}
+
+	w.WriteHeader(204)
+	return
+}
+
 func censorString(s string) string {
 	censored := []string{}
 	splitted := strings.Split(s, " ")
@@ -777,6 +821,7 @@ func main () {
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
 	secret := os.Getenv("SECRET")
+	polkaKey := os.Getenv("POLKA_KEY")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		fmt.Println(err)
@@ -786,6 +831,7 @@ func main () {
 	apiCfg.db = dbQueries
 	apiCfg.platform = platform
 	apiCfg.secret = secret
+	apiCfg.polkaKey = polkaKey
 
 	serveMux := http.NewServeMux()
 	server := http.Server{
@@ -806,6 +852,7 @@ func main () {
 	serveMux.HandleFunc("POST /api/revoke", apiCfg.handleRevoke)
 	serveMux.HandleFunc("PUT /api/users", apiCfg.handlePutUsers)
 	serveMux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.handleDeleteChirp)
+	serveMux.HandleFunc("POST /api/polka/webhooks", apiCfg.handlePolkaWebhook)
 
 	err = server.ListenAndServe()
 	if err != nil {

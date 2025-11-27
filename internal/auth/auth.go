@@ -70,8 +70,8 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 
 func GetBearerToken(headers http.Header) (string, error) {
 	v, ok := headers["Authorization"]
-	if !ok {
-		return "", fmt.Errorf("No authorization header in the request")
+	if !ok || v[0][0:7] != "Bearer " {
+		return "", fmt.Errorf("No authorization header or no bearer token in the request")
 	}
 	return v[0][7:], nil
 }
@@ -84,4 +84,12 @@ func MakeRefreshToken() (string, error) {
 	}
 	s := hex.EncodeToString(bytes)
 	return s, nil
+}
+
+func GetAPIKey(headers http.Header) (string, error) {
+	v, ok := headers["Authorization"]
+	if !ok || v[0][0:7] != "ApiKey " {
+		return "", fmt.Errorf("No authorization header or no apikey in the request")
+	}
+	return v[0][7:], nil
 }
