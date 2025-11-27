@@ -604,6 +604,158 @@ func (cfg *apiConfig) handleRevoke(w http.ResponseWriter, req *http.Request) {
 	return
 }
 
+func (cfg *apiConfig) handlePutUsers(w http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Password string `json:"password"`
+		Email string `json:"email"`
+	}
+	type errResp struct {
+		Error string `json:"error"`
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	accessToken, err := auth.GetBearerToken(req.Header)
+	if err != nil || accessToken == "" {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(accessToken, cfg.secret)
+	if err != nil {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(401)
+		w.Write(dat)
+		return
+	}
+
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err = decoder.Decode(&params)
+	if err != nil {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(400)
+		w.Write(dat)
+		return
+	}
+
+	hashed, err := auth.HashPassword(params.Password)
+	if err != nil {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(400)
+		w.Write(dat)
+		return
+	}
+
+	updateParams := database.UpdateUserPwAndEmailParams{
+		ID : userID,
+		HashedPassword : sql.NullString{
+			String : hashed,
+			Valid : true,
+		},
+		Email : params.Email,
+	}
+	updatedUser, err := cfg.db.UpdateUserPwAndEmail(req.Context(), updateParams)
+	if err != nil {
+		respBody := errResp{
+			Error : "Something went wrong",
+		}
+		dat, err2 := json.Marshal(respBody)
+		if err2 != nil {
+			log.Printf("Error marshalling JSON: %s", err2)
+			w.WriteHeader(500)
+			return
+		}
+		w.WriteHeader(400)
+		w.Write(dat)
+		return
+	}
+
+	mapped := User{
+		ID : updatedUser.ID,
+		CreatedAt : updatedUser.CreatedAt,
+		UpdatedAt : updatedUser.UpdatedAt,
+		Email : updatedUser.Email,
+	}
+	dat, err := json.Marshal(mapped)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.WriteHeader(200)
+	w.Write(dat)
+	return
+}
+
+func (cfg *apiConfig) handleDeleteChirp(w http.ResponseWriter, req *http.Request) {
+	accessToken, err := auth.GetBearerToken(req.Header)
+	if err != nil || accessToken == "" {
+		w.WriteHeader(401)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(accessToken, cfg.secret)
+	if err != nil {
+		w.WriteHeader(401)
+		return
+	}
+
+	chirpID, err := uuid.Parse(req.PathValue("chirpID"))
+	chirp, err := cfg.db.GetChirp(req.Context(), chirpID)
+	if err != nil {
+		w.WriteHeader(404)
+		return
+	}
+
+	if chirp.UserID != userID {
+		w.WriteHeader(403)
+		return
+	}
+
+	err = cfg.db.DeleteChirpByID(req.Context(), chirpID)
+	if err != nil {
+		w.WriteHeader(400)
+		return
+	}
+
+	w.WriteHeader(204)
+	return
+}
+
 func censorString(s string) string {
 	censored := []string{}
 	splitted := strings.Split(s, " ")
@@ -652,6 +804,8 @@ func main () {
 	serveMux.HandleFunc("POST /api/login", apiCfg.handleLogin)
 	serveMux.HandleFunc("POST /api/refresh", apiCfg.handleRefresh)
 	serveMux.HandleFunc("POST /api/revoke", apiCfg.handleRevoke)
+	serveMux.HandleFunc("PUT /api/users", apiCfg.handlePutUsers)
+	serveMux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.handleDeleteChirp)
 
 	err = server.ListenAndServe()
 	if err != nil {
