@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"strings"
 	"time"
+	"sort"
 	"net/http"
 	"sync/atomic"
 	"encoding/json"
@@ -284,7 +285,16 @@ func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, req *http.Request) 
 		Error string `json:"error"`
 	}
 	w.Header().Set("Content-Type", "application/json")
-	chirps, err := cfg.db.GetChirps(req.Context())
+	chirps := []database.Chirp{}
+	var err error
+	authorIDstring := req.URL.Query().Get("author_id")
+	authorID, err := uuid.Parse(authorIDstring)
+	if authorIDstring == "" {
+		chirps, err = cfg.db.GetChirps(req.Context())
+	} else {
+		chirps, err = cfg.db.GetChirpsByAuthor(req.Context(), authorID)
+	}
+	
 	if err != nil {
 		respBody := errResp{
 			Error : "Something went wrong",
@@ -300,6 +310,13 @@ func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
+	sortString := req.URL.Query().Get("sort")
+	if sortString == "desc" {
+		sort.Slice(chirps, func(i, j int) bool {
+			return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+		})
+	}
+	
 	mappedChirps := []Chirp{}
 	for _, v := range chirps {
 		mapped := Chirp{
