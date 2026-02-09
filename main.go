@@ -28,6 +28,7 @@ type User struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
 	Token     string    `json:"token"`
+	Refresh   string    `json:"refresh_token"`
 }
 
 type Chirp struct {
@@ -69,6 +70,8 @@ func main() {
 	mux.HandleFunc("POST /api/users", cfg.handleUsers)
 	mux.HandleFunc("POST /api/chirps", cfg.handleChirps)
 	mux.HandleFunc("POST /api/login", cfg.handleLogin)
+	mux.HandleFunc("POST /api/refresh", cfg.handleRefresh)
+	mux.HandleFunc("POST /api/revoke", cfg.handleRevoke)
 
 	mux.HandleFunc("GET /admin/metrics", cfg.handleMetrics)
 	mux.HandleFunc("POST /admin/reset", cfg.handleReset)
