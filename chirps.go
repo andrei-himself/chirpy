@@ -116,3 +116,43 @@ func (cfg *apiConfig) handleGetChirpByID(w http.ResponseWriter, r *http.Request)
 		UserID:    chirp.UserID,
 	})
 }
+
+func (cfg *apiConfig) handleDeleteChirps(w http.ResponseWriter, r *http.Request) {
+	bearer, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, 401, err)
+		return
+	}
+
+	userUUID, err := auth.ValidateJWT(bearer, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, 401, err)
+		return
+	}
+
+	chirpID := r.PathValue("chirpID")
+	chirpUUID, err := uuid.Parse(chirpID)
+	if err != nil {
+		respondWithError(w, 400, err)
+		return
+	}
+
+	chirp, err := cfg.db.GetChirpByID(r.Context(), chirpUUID)
+	if err != nil {
+		respondWithError(w, 400, err)
+		return
+	}
+
+	if userUUID != chirp.UserID {
+		respondWithError(w, 403, errors.New("This is not your chirp to delete!"))
+		return
+	}
+
+	err = cfg.db.DeleteChirp(r.Context(), chirpUUID)
+	if err != nil {
+		respondWithError(w, 404, err)
+		return
+	}
+
+	w.WriteHeader(204)
+}
