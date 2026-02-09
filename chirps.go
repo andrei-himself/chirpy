@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -25,7 +26,6 @@ func (cfg *apiConfig) handleChirps(w http.ResponseWriter, r *http.Request) {
 
 	type parameters struct {
 		Body string `json:"body"`
-		// UserID uuid.UUID `json:"user_id"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
@@ -75,9 +75,43 @@ func cleanChirp(msg string) string {
 }
 
 func (cfg *apiConfig) handleGetChirps(w http.ResponseWriter, r *http.Request) {
-	dbChirps, err := cfg.db.GetChirps(r.Context())
-	if err != nil {
-		respondWithError(w, 500, err)
+	dbChirps := []database.Chirp{}
+	sortParam := r.URL.Query().Get("sort")
+	userID := r.URL.Query().Get("author_id")
+	userUUID := uuid.UUID{}
+	err := errors.New("")
+	if userID != "" {
+		userUUID, err = uuid.Parse(userID)
+		if err != nil {
+			respondWithError(w, 400, err)
+			return
+		}
+	}
+
+	switch userID {
+	case "":
+		dbChirps, err = cfg.db.GetChirps(r.Context())
+		if err != nil {
+			respondWithError(w, 500, err)
+			return
+		}
+	default:
+		dbChirps, err = cfg.db.GetChirpsByUserID(r.Context(), userUUID)
+		if err != nil {
+			respondWithError(w, 500, err)
+			return
+		}
+	}
+
+	switch sortParam {
+	case "asc", "":
+
+	case "desc":
+		sort.Slice(dbChirps, func(i, j int) bool {
+			return dbChirps[i].CreatedAt.After(dbChirps[j].CreatedAt)
+		})
+	default:
+		respondWithError(w, 400, errors.New("Invalid sort query parameter!"))
 		return
 	}
 
